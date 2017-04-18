@@ -1,0 +1,1 @@
+gcc -std=gnu11 op_consumer_main.c -lzmq -o consumer
