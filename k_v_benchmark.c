@@ -84,7 +84,6 @@ bool bm_mpsc_oq_enqueue(bm_op_t op) {
 	return mpscq_enqueue(bm_mpsc_oq, op_ptr);
 }
 
-static
 void bm_init() {
 	if (bm_type == BM_NONE) return;
 	fprintf(stderr, "----------------------->GUS: Init Benchmarking\n");
@@ -134,7 +133,7 @@ void bm_write_op_to_oq(bm_oq_t* oq, bm_op_t op) {
 static
 void bm_process_op(bm_op_t op) {
 	// bm_write_line_op(bm_output_fd, op);
-	// fprintf(stderr, "type: %d, key: %"PRIu64"\n", op.type, op.key_hv);
+	fprintf(stderr, "type: %d, key: %"PRIu64"\n", op.type, op.key_hv);
 }
 
 static
@@ -197,7 +196,6 @@ void bm_libevent_loop() {
 	event_base_dispatch(bm_event_base);
 }
 
-static
 void* bm_loop_in_thread(void* args) {
 	bm_output_fd = open(bm_output_filename, 
 						O_WRONLY | O_CREAT | O_TRUNC,
@@ -207,7 +205,6 @@ void* bm_loop_in_thread(void* args) {
 	return NULL;
 }
 
-static
 void bm_record_op(bm_op_t op) {
     char* command = op.type == BM_READ_OP ? "GET" : "SET";
     switch(bm_type) {

@@ -8,7 +8,7 @@
 
 static
 void process_op(bm_op_t op) {
-    // fprintf(stderr, "Received op: %d, key: %"PRIu64"\n", op.type, op.key_hv);
+    fprintf(stderr, "Received op: %d, key: %"PRIu64"\n", op.type, op.key_hv);
 }
 
 int main (void)
