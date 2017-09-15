@@ -1,6 +1,8 @@
 #include "k_v_benchmark.h"
-#include "mpscq.h"
-#include "mpsc.c"
+#include "waitfree-mpsc-queue/mpscq.h"
+#include "waitfree-mpsc-queue/mpsc.c"
+#include "ringbuf/src/ringbuf.h"
+#include "ringbuf/src/ringbuf.c"
 #include <zmq.h>
 #include <stdio.h>
 #include <unistd.h>
