@@ -2,6 +2,10 @@
 #include "mpscq.h"
 #include "mpsc.c"
 #include <zmq.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <sys/time.h>
 
 // @ Gus: OP QUEUE
 typedef struct bm_oq_item_t bm_oq_item_t;
@@ -64,17 +68,21 @@ bm_oq_item_t* bm_oq_pop(bm_oq_t* oq) {
     return item;
 }
 
-// @ Gus: bm settings
-bm_type_t bm_type = BM_TO_ZEROMQ;
+// @ Gus: bm settings overrided by config file
+bm_type_t bm_type = BM_NONE;
 
 char bm_output_filename[] = "benchmarking_output.txt";
 int  bm_output_fd = -1;
 
 bm_oq_t bm_oq;
 struct mpscq* bm_mpsc_oq;
-#define BM_MPSC_OQ_CAP 10000 // @ Gus: capacity must be set right becasuse mpsc is NOT a ring buffer
+int BM_MPSC_OQ_CAP = -1; // @ Gus: capacity must be set right becasuse mpsc is NOT a ring buffer
 void* zmq_context = NULL;
 void* zmq_sender = NULL;
+
+bm_process_op_t bm_process_op_type = BM_PROCESS_DUMMY;
+int SPIN_TIME = -1;
+int random_accum = 0;
 
 // @ Gus: bm functions
 static
@@ -84,9 +92,32 @@ bool bm_mpsc_oq_enqueue(bm_op_t op) {
 	return mpscq_enqueue(bm_mpsc_oq, op_ptr);
 }
 
+int get_and_set_config_from_file() {
+    static char* filename = "./bm_config.txt";
+    FILE* bm_config_fptr = fopen(filename, "r");
+    if (bm_config_fptr == NULL) {
+        fprintf(stderr, "%s does NOT exist or it is Wrong.\n", filename);
+        return -1;
+    }
+
+    char line[50];
+    fgets(line, 50, bm_config_fptr);
+    bm_type = atoi(line);
+    fgets(line, 50, bm_config_fptr);
+    BM_MPSC_OQ_CAP = atoi(line);
+    fgets(line, 50, bm_config_fptr);
+    bm_process_op_type = atoi(line);
+    fgets(line, 50, bm_config_fptr);
+    SPIN_TIME = atoi(line);
+    fclose(bm_config_fptr);
+    return 0;
+}
+
 void bm_init() {
-	if (bm_type == BM_NONE) return;
-	fprintf(stderr, "----------------------->GUS: Init Benchmarking\n");
+    int rc = get_and_set_config_from_file();
+	if (rc < 0 || bm_type == BM_NONE) return;
+    srand(time(NULL));
+	fprintf(stderr, "----------------------->GUS: Init Benchmarking, %d, %d\n", bm_type, BM_MPSC_OQ_CAP);
 	switch(bm_type) {
     	case BM_NONE: {
     		;
@@ -130,10 +161,27 @@ void bm_write_op_to_oq(bm_oq_t* oq, bm_op_t op) {
 	bm_oq_push(oq, item);
 }
 
-static
 void bm_process_op(bm_op_t op) {
-	// bm_write_line_op(bm_output_fd, op);
-	fprintf(stderr, "type: %d, key: %"PRIu64"\n", op.type, op.key_hv);
+    switch(bm_process_op_type) {
+        case BM_PROCESS_DUMMY: {
+            ;
+        } break;
+        case BM_PROCESS_ADD: {
+            random_accum += rand();
+        } break;
+        case BM_PROCESS_SPIN: {
+            struct timeval t1, t2;
+            gettimeofday(&t1, NULL);
+            double elapsed = 0;
+            do {
+                gettimeofday(&t2, NULL);
+                elapsed = t2.tv_usec - t1.tv_usec;
+            } while(elapsed < SPIN_TIME);
+        } break;
+        case BM_PROCESS_PRINT: {
+            fprintf(stderr, "type: %d, key: %"PRIu64"\n", op.type, op.key_hv);
+        } break;
+    }
 }
 
 static
@@ -202,6 +250,7 @@ void* bm_loop_in_thread(void* args) {
 						S_IRUSR | S_IWUSR);
 	bm_libevent_loop();
 	// while(true) bm_consume_ops();
+    fprintf(stderr, "Accumulated Random Value: %d\n", random_accum);
 	return NULL;
 }
 
