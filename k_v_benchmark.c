@@ -78,9 +78,15 @@ int  bm_output_fd = -1;
 
 bm_oq_t bm_oq;
 struct mpscq* bm_mpsc_oq;
-int BM_MPSC_OQ_CAP = -1; // @ Gus: capacity must be set right becasuse mpsc is NOT a ring buffer
+int BM_MPSC_OQ_CAP = -1; // @ Gus: capacity must be set right because mpsc is NOT a ring buffer
 void* zmq_context = NULL;
 void* zmq_sender = NULL;
+#define MAX_WORKERS 2
+static size_t ringbuf_obj_size;
+ringbuf_t* bm_ringbuf;
+ringbuf_worker_t* w1;
+ssize_t off1 = -1;
+unsigned char* buf;
 
 bm_process_op_t bm_process_op_type = BM_PROCESS_DUMMY;
 int SPIN_TIME = -1;
@@ -136,7 +142,17 @@ void bm_init() {
     		bm_oq_init(&bm_oq);
     	} break;
     	case BM_TO_LOCK_FREE_QUEUE: {
-    		bm_mpsc_oq = mpscq_create(NULL, BM_MPSC_OQ_CAP);
+            // {
+            //     bm_mpsc_oq = mpscq_create(NULL, BM_MPSC_OQ_CAP);
+            // }
+            {
+                size_t buf_len = BM_MPSC_OQ_CAP * sizeof(bm_op_t);
+                buf = malloc(buf_len);
+                ringbuf_get_sizes(MAX_WORKERS, &ringbuf_obj_size, NULL);
+                bm_ringbuf = malloc(ringbuf_obj_size);
+                ringbuf_setup(bm_ringbuf, MAX_WORKERS, buf_len);
+                w1 = ringbuf_register(bm_ringbuf, 0);
+            }
     	} break;
     	case BM_TO_ZEROMQ: {
 		    zmq_context = zmq_ctx_new ();
@@ -207,13 +223,27 @@ void bm_consume_ops() {
 			}
     	} break;
     	case BM_TO_LOCK_FREE_QUEUE: {
-    		void* item = mpscq_dequeue(bm_mpsc_oq);
-    		while(NULL != item) {
-    			bm_op_t* op_ptr = item;
-    			bm_process_op(*op_ptr);
-    			free(op_ptr);
-    			item = mpscq_dequeue(bm_mpsc_oq);
-    		}
+            // {
+            //     void* item = mpscq_dequeue(bm_mpsc_oq);
+            //     while(NULL != item) {
+            //         bm_op_t* op_ptr = item;
+            //         bm_process_op(*op_ptr);
+            //         free(op_ptr);
+            //         item = mpscq_dequeue(bm_mpsc_oq);
+            //     }    
+            // }
+    		{
+                size_t len, woff;
+                len = ringbuf_consume(bm_ringbuf, &woff);
+                size_t n_op = len/sizeof(bm_op_t);
+                for (int i = 0; i < n_op; ++i) {
+                    bm_op_t op;
+                    memcpy(&op, &buf[woff], sizeof(bm_op_t));
+                    bm_process_op(op);
+                    woff += sizeof(bm_op_t);
+                }
+                ringbuf_release(bm_ringbuf, len);
+            }
     	} break;
     	case BM_TO_ZEROMQ: {
     		;
@@ -272,7 +302,15 @@ void bm_record_op(bm_op_t op) {
             bm_write_op_to_oq(&bm_oq, op);
         } break;
         case BM_TO_LOCK_FREE_QUEUE: {
-            bm_mpsc_oq_enqueue(op);
+            // {
+            //     bm_mpsc_oq_enqueue(op);    
+            // }
+            
+            {
+                ssize_t off = ringbuf_acquire(bm_ringbuf, w1, sizeof(bm_op_t));
+                memcpy(&buf[off], &op, sizeof(bm_op_t));
+                ringbuf_produce(bm_ringbuf, w1);
+            }
         } break;
         case BM_TO_ZEROMQ: {
             // fprintf(stderr, "sending op: %d, hv: %"PRIu64"\n", op.type, op.key_hv);
