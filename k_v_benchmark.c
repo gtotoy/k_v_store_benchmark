@@ -1,8 +1,9 @@
 #include "k_v_benchmark.h"
 #include "waitfree-mpsc-queue/mpscq.h"
 #include "waitfree-mpsc-queue/mpsc.c"
-#include "ringbuf/src/ringbuf.h"
-#include "ringbuf/src/ringbuf.c"
+// #include "ringbuf/src/ringbuf.h"
+// #include "ringbuf/src/ringbuf.c"
+#include "liblfds7.1.1/liblfds7.1.1/liblfds711/inc/liblfds711.h"
 #include <zmq.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -81,12 +82,15 @@ struct mpscq* bm_mpsc_oq;
 int BM_MPSC_OQ_CAP = -1; // @ Gus: capacity must be set right because mpsc is NOT a ring buffer
 void* zmq_context = NULL;
 void* zmq_sender = NULL;
-#define MAX_WORKERS 2
-static size_t ringbuf_obj_size;
-ringbuf_t* bm_ringbuf;
-ringbuf_worker_t* w1;
-ssize_t off1 = -1;
-unsigned char* buf;
+// #define MAX_WORKERS 2
+// static size_t ringbuf_obj_size = 0;
+// ringbuf_t* bm_ringbuf;
+// ringbuf_worker_t* w1;
+// ssize_t off1 = -1;
+// unsigned char* buf;
+enum lfds711_misc_flag overwrite_occurred_flag;
+struct lfds711_ringbuffer_element *re;
+struct lfds711_ringbuffer_state rs;
 
 bm_process_op_t bm_process_op_type = BM_PROCESS_DUMMY;
 int SPIN_TIME = -1;
@@ -145,13 +149,20 @@ void bm_init() {
             // {
             //     bm_mpsc_oq = mpscq_create(NULL, BM_MPSC_OQ_CAP);
             // }
+            // {
+            //     size_t buf_len = BM_MPSC_OQ_CAP * sizeof(bm_op_t);
+            //     buf = malloc(buf_len);
+            //     memset(buf, 0, buf_len);
+            //     ringbuf_get_sizes(MAX_WORKERS, &ringbuf_obj_size, NULL);
+            //     bm_ringbuf = malloc(ringbuf_obj_size);
+            //     memset(bm_ringbuf, 0, ringbuf_obj_size);
+            //     ringbuf_setup(bm_ringbuf, MAX_WORKERS, buf_len);
+            //     w1 = ringbuf_register(bm_ringbuf, 0);
+            // }
             {
-                size_t buf_len = BM_MPSC_OQ_CAP * sizeof(bm_op_t);
-                buf = malloc(buf_len);
-                ringbuf_get_sizes(MAX_WORKERS, &ringbuf_obj_size, NULL);
-                bm_ringbuf = malloc(ringbuf_obj_size);
-                ringbuf_setup(bm_ringbuf, MAX_WORKERS, buf_len);
-                w1 = ringbuf_register(bm_ringbuf, 0);
+                // @ Gus: plus one extra for the necessary dummy element
+                re = malloc( sizeof(struct lfds711_ringbuffer_element) * BM_MPSC_OQ_CAP + 1 );
+                lfds711_ringbuffer_init_valid_on_current_logical_core( &rs, re, BM_MPSC_OQ_CAP + 1, NULL );
             }
     	} break;
     	case BM_TO_ZEROMQ: {
@@ -232,17 +243,27 @@ void bm_consume_ops() {
             //         item = mpscq_dequeue(bm_mpsc_oq);
             //     }    
             // }
-    		{
-                size_t len, woff;
-                len = ringbuf_consume(bm_ringbuf, &woff);
-                size_t n_op = len/sizeof(bm_op_t);
-                for (int i = 0; i < n_op; ++i) {
-                    bm_op_t op;
-                    memcpy(&op, &buf[woff], sizeof(bm_op_t));
-                    bm_process_op(op);
-                    woff += sizeof(bm_op_t);
+    		// {
+      //           size_t len, woff;
+      //           len = ringbuf_consume(bm_ringbuf, &woff);
+      //           size_t n_op = len/sizeof(bm_op_t);
+      //           for (int i = 0; i < n_op; ++i) {
+      //               bm_op_t op;
+      //               memcpy(&op, &buf[woff], sizeof(bm_op_t));
+      //               bm_process_op(op);
+      //               woff += sizeof(bm_op_t);
+      //           }
+      //           ringbuf_release(bm_ringbuf, len);
+      //       }
+            {
+                void* item;
+                int rv = lfds711_ringbuffer_read( &rs, &item, NULL );
+                while(1 == rv) {
+                    bm_op_t* op_ptr = item;
+                    bm_process_op(*op_ptr);
+                    free(op_ptr);
+                    rv = lfds711_ringbuffer_read( &rs, &item, NULL );
                 }
-                ringbuf_release(bm_ringbuf, len);
             }
     	} break;
     	case BM_TO_ZEROMQ: {
@@ -306,10 +327,23 @@ void bm_record_op(bm_op_t op) {
             //     bm_mpsc_oq_enqueue(op);    
             // }
             
+            // {
+            //     ssize_t off = ringbuf_acquire(bm_ringbuf, w1, sizeof(bm_op_t));
+            //     memcpy(&buf[off], &op, sizeof(bm_op_t));
+            //     ringbuf_produce(bm_ringbuf, w1);
+            // }
             {
-                ssize_t off = ringbuf_acquire(bm_ringbuf, w1, sizeof(bm_op_t));
-                memcpy(&buf[off], &op, sizeof(bm_op_t));
-                ringbuf_produce(bm_ringbuf, w1);
+                bm_op_t* op_ptr = malloc(sizeof(bm_op_t));
+                *op_ptr = op;
+                lfds711_ringbuffer_write( &rs, 
+                                        op_ptr, 
+                                        NULL, 
+                                        &overwrite_occurred_flag, 
+                                        NULL, 
+                                        NULL );
+                if( overwrite_occurred_flag == LFDS711_MISC_FLAG_RAISED ) {
+                    fprintf(stderr, "----------------------->GUS: OVERRIDED ELEMENT IN RING BUFFER\n");
+                }
             }
         } break;
         case BM_TO_ZEROMQ: {
