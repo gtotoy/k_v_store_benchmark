@@ -3,6 +3,7 @@
 ## Dependencies
 
 * ZeroMQ, http://zeromq.org/
+* liblfds, https://liblfds.org/
 
 ## How do I compile the lib and make it available to get linked?
 gcc -std=gnu11 -c k_v_benchmark.c -o k_v_benchmark.o
